@@ -1,0 +1,1 @@
+# Actividad-Evaluable-Patrones-con-K-means
