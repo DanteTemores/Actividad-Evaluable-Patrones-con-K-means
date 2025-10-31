@@ -1,0 +1,123 @@
+# Librerías
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+
+sns.set(style="whitegrid", rc={"figure.figsize": (8, 5)})
+
+# 2️ Cargar dataset
+df = pd.read_csv("titanic.csv")
+
+# 3️ Selección y preprocesamiento
+# Usamos variables con señal para agrupamiento:
+#   - Numéricas: Pclass, Age, SibSp, Parch, Fare
+#   - Categóricas a codificar: Sex, Embarked
+use_cols = ["Pclass", "Age", "SibSp", "Parch", "Fare", "Sex", "Embarked", "Survived"]
+df = df[use_cols].copy()
+
+# Imputar faltantes simples
+df["Age"] = df["Age"].fillna(df["Age"].median())
+df["Fare"] = df["Fare"].replace(0, np.nan).fillna(df["Fare"].median())
+df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
+
+# Codificación:
+# Sex: male=0, female=1
+df["Sex"] = df["Sex"].map({"male": 0, "female": 1}).astype(int)
+# One-hot para Embarked
+df = pd.get_dummies(df, columns=["Embarked"], drop_first=True)
+
+# Definir features de clustering (excluimos Survived para que no sesgue los grupos)
+features = [c for c in df.columns if c != "Survived"]
+X = df[features].copy()
+
+# 4️ Escalado de los datos
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# 5️ Determinar número de clusters con el método del codo y silueta
+inertia = []
+sil_scores = []
+K_range = range(2, 11)  # K>=2 para poder calcular silhouette
+
+for k in K_range:
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X_scaled)
+    inertia.append(kmeans.inertia_)
+    sil = silhouette_score(X_scaled, labels)
+    sil_scores.append(sil)
+
+# Graficar método del codo e índice de silueta
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+ax[0].plot(list(K_range), inertia, marker='o')
+ax[0].set_xlabel("Número de clusters (K)")
+ax[0].set_ylabel("Inercia")
+ax[0].set_title("Método del codo")
+
+ax[1].plot(list(K_range), sil_scores, marker='o')
+ax[1].set_xlabel("Número de clusters (K)")
+ax[1].set_ylabel("Silhouette score")
+ax[1].set_title("Índice de silueta")
+plt.tight_layout()
+plt.show()
+
+# 6️ Aplicar K-means con K elegido (puedes cambiarlo tras ver los gráficos)
+k = 4
+kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+labels = kmeans.fit_predict(X_scaled)
+df["cluster"] = labels
+
+# 7️ Revisar centros de los clusters (valores originales, desescalados)
+centers_scaled = kmeans.cluster_centers_
+centers = pd.DataFrame(scaler.inverse_transform(centers_scaled), columns=features)
+centers["cluster"] = range(k)
+print("\nCentros de los clusters (escala original):")
+print(centers.round(2).to_string(index=False))
+
+# 8️ Visualizaciones de clusters
+
+# 8.1) Proyección 2D con PCA (recomendado para visualizar muchos features)
+pca = PCA(n_components=2, random_state=42)
+X_pca = pca.fit_transform(X_scaled)
+plot_df = pd.DataFrame(X_pca, columns=["PC1", "PC2"])
+plot_df["cluster"] = labels
+
+plt.figure(figsize=(8, 6))
+sns.scatterplot(
+    data=plot_df, x="PC1", y="PC2",
+    hue="cluster", palette="Set2", alpha=0.8
+)
+plt.title("Clusters (PCA 2D)")
+plt.tight_layout()
+plt.show()
+
+# 8.2) Alternativa: visualizar en ejes originales (ej. Fare vs Age)
+plt.figure(figsize=(8, 6))
+sns.scatterplot(
+    data=pd.concat([df, X], axis=1),
+    x="Age", y="Fare", hue="cluster", palette="Set2", alpha=0.8
+)
+plt.title("Clusters (Age vs Fare)")
+plt.tight_layout()
+plt.show()
+
+# 9️ Perfilado de clusters (medias por grupo + tasa de supervivencia)
+profile_cols = [c for c in features if c != "cluster"]
+cluster_profile = (
+    df.groupby("cluster")
+      .agg(**{
+          **{f"mean_{c}": (c, "mean") for c in profile_cols},
+          "n": ("cluster", "size"),
+          "survival_rate": ("Survived", "mean")
+      })
+      .reset_index()
+      .sort_values("n", ascending=False)
+)
+
+print("\nPerfil de clusters (medias y tasa de supervivencia):")
+print(cluster_profile.round(3).to_string(index=False))
